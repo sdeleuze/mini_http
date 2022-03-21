@@ -26,8 +26,6 @@ Note: If you're experiencing poor performance on benchmarks, see
 #[macro_use] extern crate log;
 extern crate mio;
 extern crate slab;
-extern crate threadpool;
-extern crate num_cpus;
 extern crate httparse;
 extern crate http;
 
@@ -36,11 +34,6 @@ mod errors;
 mod http_stream;
 
 use std::io::{self, Read, Write};
-use std::sync;
-use std::sync::mpsc::{channel, Receiver};
-use std::time;
-use std::thread;
-use std::net;
 use mio::net::{TcpListener};
 pub use http::header;
 pub use http::method;
@@ -56,6 +49,36 @@ pub use errors::*;
 /// Re-exported `http::Response` for constructing return responses in handlers
 pub use http::Response;
 use mio::{Interest, Token};
+
+#[cfg(target_os = "wasi")]
+#[cfg(not(windows))]
+fn get_first_listen_fd_listener() -> Option<std::net::TcpListener> {
+    #[cfg(unix)]
+    use std::os::unix::io::FromRawFd;
+    #[cfg(target_os = "wasi")]
+    use std::os::wasi::io::FromRawFd;
+
+    Some(unsafe { std::net::TcpListener::from_raw_fd(3) })
+}
+
+#[cfg(windows)]
+fn get_first_listen_fd_listener() -> Option<std::net::TcpListener> {
+    // Windows does not support `LISTEN_FDS`
+    None
+}
+
+#[cfg(target_os = "wasi")]
+fn get_tcp_listener(_addr: Option<String>) -> TcpListener {
+    std::env::var("LISTEN_FDS").expect("LISTEN_FDS environment variable unset");
+    let stdlistener = get_first_listen_fd_listener().unwrap();
+    stdlistener.set_nonblocking(true).unwrap();
+    TcpListener::from_std(stdlistener)
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn get_tcp_listener(addr: Option<String>) -> TcpListener {
+    TcpListener::bind(addr.unwrap().parse().unwrap()).unwrap()
+}
 
 
 /// Internal `http::Response` wrapper with helpers for constructing the bytes
@@ -133,13 +156,6 @@ impl std::ops::DerefMut for Request {
     }
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SocketStatus {
-    New,
-    Reused,
-}
-
 /// Represent the tcp socket & streams being polled by `mio`
 enum Socket {
     Listener {
@@ -147,13 +163,9 @@ enum Socket {
     },
     Stream {
         stream: mio::net::TcpStream,
-        keep_alive: bool,
-        socket_status: SocketStatus,
         reader: HttpStreamReader,
         request: Option<RequestHead>,
         done_reading: bool,
-        receiver: Option<Receiver<ResponseWrapper>>,
-        response: Option<ResponseWrapper>,
         bytes_written: usize,
     },
 }
@@ -163,78 +175,47 @@ impl Socket {
     }
 
     /// Construct a new `Stream` variant accepts from a tcp listener
-    fn new_stream(s: mio::net::TcpStream, reader: HttpStreamReader, socket_status: SocketStatus) -> Self {
+    fn new_stream(s: mio::net::TcpStream, reader: HttpStreamReader) -> Self {
         Socket::Stream {
             stream: s,
-            keep_alive: true,
-            socket_status: socket_status,
-            reader: reader,
+            reader,
             request: None,
             done_reading: false,
-            receiver: None,
-            response: None,
             bytes_written: 0,
         }
     }
 
     /// Construct a "continued" stream. Stream reading hasn't been completed yet
     fn continued_stream(stream: mio::net::TcpStream,
-                        keep_alive: bool,
-                        socket_status: SocketStatus,
                         reader: HttpStreamReader,
                         request: Option<RequestHead>,
                         done_reading: bool,
-                        receiver: Option<Receiver<ResponseWrapper>>,
-                        response: Option<ResponseWrapper>,
                         bytes_written: usize) -> Self
     {
-        Socket::Stream { stream, keep_alive, socket_status, reader, request, done_reading, receiver, response, bytes_written }
-    }
-}
-
-
-enum Thread {
-    Pooled {
-        pool: threadpool::ThreadPool,
-    },
-    Threaded,
-}
-impl Thread {
-    fn new(size: usize) -> Self {
-        if size > 0 {
-            Thread::Pooled { pool: threadpool::ThreadPool::new(size) }
-        } else {
-            Thread::Threaded
-        }
-    }
-
-    fn execute<F: FnOnce() + Send + 'static>(&self, f: F) {
-        match self {
-            &Thread::Pooled { ref pool } => {
-                pool.execute(f);
-            }
-            &Thread::Threaded => {
-                thread::spawn(f);
-            }
-        }
+        Socket::Stream { stream, reader, request, done_reading, bytes_written }
     }
 }
 
 
 pub struct Server {
-    addr: net::SocketAddr,
-    no_delay: bool,
-    pool_size: usize,
-    keep_alive_dur: time::Duration,
+    addr: Option<String>,
+    no_delay: bool
 }
 impl Server {
     /// Initialize a new default `Server` to run on `addr`
+    #[cfg(not(target_os = "wasi"))]
     pub fn new(addr: &str) -> Result<Self> {
         Ok(Self {
-            addr: addr.parse()?,
-            no_delay: false,
-            pool_size: num_cpus::get() * 8,
-            keep_alive_dur: time::Duration::from_secs(5),
+            addr: Some(addr.to_string()),
+            no_delay: false
+        })
+    }
+
+    /// Initialize a new default `Server` to run on preopened socket
+    pub fn preopened() -> Result<Self> {
+        Ok(Self {
+            addr: None,
+            no_delay: false
         })
     }
 
@@ -258,32 +239,12 @@ impl Server {
         self
     }
 
-    /// Configure the size of the thread pool that's used for executing handlers
-    ///
-    /// Defaults to `num_cpus * 8`. If zero is specified, unlimited threads will
-    /// be spawned instead of using a thread pool.
-    pub fn pool_size(&mut self, pool_size: usize) -> &mut Self {
-        self.pool_size = pool_size;
-        self
-    }
-
-    /// Configure keep-alive timeout in seconds
-    ///
-    /// Defaults to 5 seconds
-    pub fn set_keepalive_secs(&mut self, keep_alive_secs: u64) -> &mut Self {
-        self.keep_alive_dur = time::Duration::from_secs(keep_alive_secs);
-        self
-    }
-
     /// Start the server using the given handler function
     pub fn start<F>(&self, func: F) -> Result<()>
-        where F: Send + Sync + 'static + Fn(Request) -> Response<Vec<u8>>
+        where F: 'static + Fn(Request) -> Response<Vec<u8>>
     {
-        let func = sync::Arc::new(func);
-        let pool = Thread::new(self.pool_size);
-
         let mut sockets = slab::Slab::with_capacity(1024);
-        let mut server = TcpListener::bind(self.addr)?;
+        let mut server = get_tcp_listener(self.addr.clone());
 
         // initialize poll
         let mut poll = mio::Poll::new()?;
@@ -295,24 +256,40 @@ impl Server {
             entry.insert(Socket::new_listener(server));
         }
 
-        info!("** Listening on {} **", self.addr);
+        if let Some(addr) = &self.addr {
+            info!("** Listening on {} **", addr);
+        } else {
+            info!("** Using preopened socket FD 3 **");
+        }
 
         let mut events = mio::Events::with_capacity(1024);
         loop {
+            debug!("Beginning of loop");
             poll.poll(&mut events, None)?;
             'next_event: for e in &events {
                 let token = e.token();
                 match sockets.remove(token.into()) {
                     Socket::Listener { mut listener } => {
                         if e.is_readable() {
-                            let (mut sock, addr) = listener.accept()?;
-                            debug!("opened socket to: {:?}", addr);
+                            match listener.accept() {
+                                Ok((mut sock, addr)) => {
+                                    debug!("opened socket to: {:?}", addr);
 
-                            // register the newly opened socket
-                            let entry = sockets.vacant_entry();
-                            let token = Token(entry.key());
-                            poll.registry().register(&mut sock, token, Interest::READABLE | Interest::WRITABLE)?;
-                            entry.insert(Socket::new_stream(sock, HttpStreamReader::new(), SocketStatus::New));
+                                    // register the newly opened socket
+                                    let entry = sockets.vacant_entry();
+                                    let token = Token(entry.key());
+                                    poll.registry().register(&mut sock, token, Interest::READABLE | Interest::WRITABLE)?;
+                                    entry.insert(Socket::new_stream(sock, HttpStreamReader::new()));
+                                },
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                    break
+                                },
+                                Err(e) => {
+                                    error!("{:?} - Encountered error while accepting the connection: {:?}", token, e);
+                                    // let this socket die, jump to the next event
+                                    break
+                                }
+                            };
                         }
                         // reregister listener
                         let entry = sockets.vacant_entry();
@@ -320,8 +297,9 @@ impl Server {
                         poll.registry().reregister(&mut listener, token, Interest::READABLE)?;
                         entry.insert(Socket::new_listener(listener));
                     }
-                    Socket::Stream { mut stream, mut keep_alive, socket_status, mut reader, request, mut done_reading,
-                                     mut receiver, mut response, mut bytes_written } => {
+                    Socket::Stream {
+                        mut stream, mut reader, request, mut done_reading, mut bytes_written
+                    } => {
 
                         // Try reading and parsing a request from this stream.
                         // `try_build_request` will return `None` until the request is parsed and the
@@ -371,21 +349,25 @@ impl Server {
                                         error!("{:?} - Encountered error while parsing: {}", token, e);
                                         (None,
                                          Some(ResponseWrapper::new(
-                                                 Response::builder().status(400).body(b"bad request".to_vec()).unwrap())))
+                                             Response::builder().status(400).body(b"bad request".to_vec()).unwrap())))
                                     }
                                 }
                             }
                         } else {
                             (request, None)
                         };
-                        if request.is_some() || err_response.is_some() { done_reading = true; }
+                        if request.is_some() || err_response.is_some() {
+                            done_reading = true;
+                            debug!("Reading is done for token {:?}", token);
+                        }
 
                         // Once the request is parsed, this block will execute once.
                         // The head-only request (RequestHead) will be converted into
                         // a public `Request` and the `HttpStreamReader`s `read_buf` will be
                         // swapped into the new `Request`s body. The provided
                         // `func` handler will be started for later retrieval
-                        receiver = if let Some(req) = request.take() {
+                        let response = if let Some(req) = request.take() {
+                            debug!("Begin processing the response for token {:?}", token);
                             let (parts, _) = req.into_parts();
                             let mut body = vec![];
                             std::mem::swap(&mut body, &mut reader.read_buf);
@@ -394,58 +376,24 @@ impl Server {
                                 body_start: reader.headers_length,
                             };
 
-                            // Check for an explicit connection header, default to keep-alive = true
-                            // TODO: This parsing needs to be improved to support all possible
-                            //       values
-                            keep_alive = {
-                                request.headers().get(header::CONNECTION)
-                                    .map(|v| v.as_bytes().eq_ignore_ascii_case(b"keep-alive"))
-                                    .unwrap_or(keep_alive)
-                            };
-                            if socket_status == SocketStatus::New {
-                                // Disable Nagle algorithm.
-                                // The default setting (no_delay=false, Nagle enabled) causes a
-                                // significant drop in performance for keep-alive connections
-                                stream.set_nodelay(self.no_delay).unwrap();
-                                // Remove by https://github.com/tokio-rs/mio/commit/02e9be41f27daf822575444fdd2b3067433a5996
-                                //if keep_alive {
-                                //    debug!("{:?} setting keep-alive", token);
-                                //    stream.set_keepalive(Some(self.keep_alive_dur)).unwrap();
-                                //}
-                            }
-
-                            // Kick-off the handler
-                            let (send, recv) = channel();
-                            let func = func.clone();
-                            pool.execute(move || {
-                                let resp = func(request);
-                                let mut resp = ResponseWrapper::new(resp);
-                                resp.serialize_headers();
-                                // If sending fails there's nothing we can really do.
-                                // The socket was probably closed and its receiver dropped
-                                send.send(resp).ok();
-                            });
-                            Some(recv)
+                            let resp = func(request);
+                            let mut resp = ResponseWrapper::new(resp);
+                            resp.serialize_headers();
+                            debug!("Headers serialized for token {:?}", token);
+                            Some(resp)
                         } else {
-                            receiver
+                            None
                         };
 
                         // See if a `ResponseWrapper` is available
-                        response = if let Some(ref recv) = receiver {
-                            recv.try_recv().ok()
-                        } else {
-                            if let Some(err_response) = err_response {
-                                Some(err_response)
-                            } else {
-                                None
-                            }
-                        };
 
                         // If we have a `ResponseWrapper`, start writing its headers and body
                         // back to the stream
                         let mut done_write = false;
                         if let Some(ref resp) = response {
+                            debug!("Response body ready to be written for token {:?}", token);
                             if e.is_writable() {
+                                debug!("Body writeable for token {:?}", token);
                                 let header_data_len = resp.header_data.len();
                                 let body_len = resp.body().len();
                                 let total_len = header_data_len + body_len;
@@ -479,27 +427,23 @@ impl Server {
                                     }
                                 }
                             }
+                            else {
+                                debug!("Body not writeable for token {:?}", token);
+                            }
                         }
 
                         if !done_write {
                             // we're not done writing our response to this socket yet
                             // reregister stream
+                            debug!("Write not done, reregister stream for token {:?}", token);
                             let entry = sockets.vacant_entry();
                             let token = Token(entry.key());
                             poll.registry().reregister(&mut stream, token, Interest::READABLE | Interest::WRITABLE)?;
                             entry.insert(
                                 Socket::continued_stream(
-                                    stream, keep_alive, socket_status, reader, request, done_reading,
-                                    receiver, response, bytes_written,
-                                    )
-                                );
-                        } else if keep_alive {
-                            // we're done writing, but we need to keep the socket open and reuse it
-                            debug!("{:?} - Reusing stream", token);
-                            let entry = sockets.vacant_entry();
-                            let token = Token(entry.key());
-                            poll.registry().reregister(&mut stream, token, Interest::READABLE | Interest::WRITABLE)?;
-                            entry.insert(Socket::new_stream(stream, HttpStreamReader::new(), SocketStatus::Reused));
+                                    stream, reader, request, done_reading, bytes_written,
+                                )
+                            );
                         } else {
                             debug!("{:?} - Done writing, killing socket", token);
                         }
@@ -509,4 +453,3 @@ impl Server {
         }
     }
 }
-

@@ -11,19 +11,18 @@ license = "MIT"
 
 [dependencies]
 error-chain = "0.12"
-threadpool = "1"
-num_cpus = "1"
-mio = { version = "0.8", features=[ "os-poll", "net" ] }
+mio = { version = "0.8.2", features=[ "os-poll", "net" ] }
 slab = "0.4"
 httparse = "1"
 http = "0.1"
 log = "0.4"
-
-[dev-dependencies]
-env_logger = "0.9"
+simple_logger = "2.1"
 
 [[example]]
 name = "hello"
+
+[[example]]
+name = "hello_wasi"
 
 [[example]]
 name = "echo"

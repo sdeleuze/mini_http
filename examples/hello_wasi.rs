@@ -4,10 +4,11 @@ extern crate simple_logger;
 
 use simple_logger::SimpleLogger;
 
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     SimpleLogger::new().init().unwrap();
 
-    mini_http::Server::new("127.0.0.1:3000")?
+    mini_http::Server::preopened()?
         .tcp_nodelay(true)
         .start(|_req| {
             mini_http::Response::builder()
