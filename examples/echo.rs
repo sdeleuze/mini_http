@@ -3,9 +3,7 @@ extern crate env_logger;
 #[macro_use] extern crate log;
 
 
-fn init_logger() -> Result<(), Box<std::error::Error>> {
-    // ::std::env::set_var("LOG", "info");
-    use std::io::Write;
+fn init_logger() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(buf, "[{}] - [{}] -> {}",
@@ -20,7 +18,7 @@ fn init_logger() -> Result<(), Box<std::error::Error>> {
 }
 
 
-fn run() -> Result<(), Box<std::error::Error>> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_logger()?;
     mini_http::Server::new("127.0.0.1:3000")?
         .tcp_nodelay(true)
