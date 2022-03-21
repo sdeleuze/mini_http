@@ -9,9 +9,6 @@ keywords = ["web"]
 categories = ["web-programming::http-server", "asynchronous"]
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "jaemk/mini_http", branch = "master" }
-
 [dependencies]
 error-chain = "0.12"
 threadpool = "1"
