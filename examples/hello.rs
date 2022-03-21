@@ -1,7 +1,7 @@
 extern crate mini_http;
 
 
-fn run() -> Result<(), Box<std::error::Error>> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     mini_http::Server::new("127.0.0.1:3000")?
         .tcp_nodelay(true)
         .start(|_req| {

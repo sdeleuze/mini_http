@@ -41,8 +41,6 @@ use std::sync::mpsc::{channel, Receiver};
 use std::time;
 use std::thread;
 use std::net;
-#[allow(unused)]
-use std::ascii::AsciiExt;
 use mio::net::{TcpListener};
 pub use http::header;
 pub use http::method;
