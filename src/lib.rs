@@ -55,6 +55,7 @@ pub use errors::*;
 
 /// Re-exported `http::Response` for constructing return responses in handlers
 pub use http::Response;
+use mio::{Interest, Token};
 
 
 /// Internal `http::Response` wrapper with helpers for constructing the bytes
@@ -282,17 +283,15 @@ impl Server {
         let pool = Thread::new(self.pool_size);
 
         let mut sockets = slab::Slab::with_capacity(1024);
-        let server = TcpListener::bind(&self.addr)?;
+        let mut server = TcpListener::bind(self.addr)?;
 
         // initialize poll
-        let poll = mio::Poll::new()?;
+        let mut poll = mio::Poll::new()?;
         {
             // register our tcp listener
             let entry = sockets.vacant_entry();
-            let server_token = entry.key().into();
-            poll.register(&server, server_token,
-                          mio::Ready::readable(),
-                          mio::PollOpt::edge() | mio::PollOpt::oneshot())?;
+            let server_token = Token(entry.key());
+            poll.registry().register(&mut server, server_token, Interest::READABLE)?;
             entry.insert(Socket::new_listener(server));
         }
 
@@ -304,31 +303,25 @@ impl Server {
             'next_event: for e in &events {
                 let token = e.token();
                 match sockets.remove(token.into()) {
-                    Socket::Listener { listener } => {
-                        let readiness = e.readiness();
-                        if readiness.is_readable() {
-                            let (sock, addr) = listener.accept()?;
+                    Socket::Listener { mut listener } => {
+                        if e.is_readable() {
+                            let (mut sock, addr) = listener.accept()?;
                             debug!("opened socket to: {:?}", addr);
 
                             // register the newly opened socket
                             let entry = sockets.vacant_entry();
-                            let token = entry.key().into();
-                            poll.register(&sock, token,
-                                          mio::Ready::readable() | mio::Ready::writable(),
-                                          mio::PollOpt::edge() | mio::PollOpt::oneshot())?;
+                            let token = Token(entry.key());
+                            poll.registry().register(&mut sock, token, Interest::READABLE | Interest::WRITABLE)?;
                             entry.insert(Socket::new_stream(sock, HttpStreamReader::new(), SocketStatus::New));
                         }
                         // reregister listener
                         let entry = sockets.vacant_entry();
-                        let token = entry.key().into();
-                        poll.reregister(&listener, token,
-                                        mio::Ready::readable(),
-                                        mio::PollOpt::edge() | mio::PollOpt::oneshot())?;
+                        let token = Token(entry.key());
+                        poll.registry().reregister(&mut listener, token, Interest::READABLE)?;
                         entry.insert(Socket::new_listener(listener));
                     }
                     Socket::Stream { mut stream, mut keep_alive, socket_status, mut reader, request, mut done_reading,
                                      mut receiver, mut response, mut bytes_written } => {
-                        let readiness = e.readiness();
 
                         // Try reading and parsing a request from this stream.
                         // `try_build_request` will return `None` until the request is parsed and the
@@ -336,7 +329,7 @@ impl Server {
                         // to `true`. At that point, if this socket is readable, we still need to
                         // check if it's been closed, but we will no longer try parsing the request
                         // bytes
-                        let (mut request, err_response): (Option<RequestHead>, Option<ResponseWrapper>) = if readiness.is_readable() {
+                        let (mut request, err_response): (Option<RequestHead>, Option<ResponseWrapper>) = if e.is_readable() {
                             let mut buf = [0; 256];
                             let stream_close = loop {
                                 match stream.read(&mut buf) {
@@ -414,10 +407,11 @@ impl Server {
                                 // The default setting (no_delay=false, Nagle enabled) causes a
                                 // significant drop in performance for keep-alive connections
                                 stream.set_nodelay(self.no_delay).unwrap();
-                                if keep_alive {
-                                    debug!("{:?} setting keep-alive", token);
-                                    stream.set_keepalive(Some(self.keep_alive_dur)).unwrap();
-                                }
+                                // Remove by https://github.com/tokio-rs/mio/commit/02e9be41f27daf822575444fdd2b3067433a5996
+                                //if keep_alive {
+                                //    debug!("{:?} setting keep-alive", token);
+                                //    stream.set_keepalive(Some(self.keep_alive_dur)).unwrap();
+                                //}
                             }
 
                             // Kick-off the handler
@@ -451,7 +445,7 @@ impl Server {
                         // back to the stream
                         let mut done_write = false;
                         if let Some(ref resp) = response {
-                            if readiness.is_writable() {
+                            if e.is_writable() {
                                 let header_data_len = resp.header_data.len();
                                 let body_len = resp.body().len();
                                 let total_len = header_data_len + body_len;
@@ -491,10 +485,8 @@ impl Server {
                             // we're not done writing our response to this socket yet
                             // reregister stream
                             let entry = sockets.vacant_entry();
-                            let token = entry.key().into();
-                            poll.reregister(&stream, token,
-                                            mio::Ready::readable() | mio::Ready::writable(),
-                                            mio::PollOpt::edge() | mio::PollOpt::oneshot())?;
+                            let token = Token(entry.key());
+                            poll.registry().reregister(&mut stream, token, Interest::READABLE | Interest::WRITABLE)?;
                             entry.insert(
                                 Socket::continued_stream(
                                     stream, keep_alive, socket_status, reader, request, done_reading,
@@ -505,10 +497,8 @@ impl Server {
                             // we're done writing, but we need to keep the socket open and reuse it
                             debug!("{:?} - Reusing stream", token);
                             let entry = sockets.vacant_entry();
-                            let token = entry.key().into();
-                            poll.reregister(&stream, token,
-                                            mio::Ready::readable() | mio::Ready::writable(),
-                                            mio::PollOpt::edge() | mio::PollOpt::oneshot())?;
+                            let token = Token(entry.key());
+                            poll.registry().reregister(&mut stream, token, Interest::READABLE | Interest::WRITABLE)?;
                             entry.insert(Socket::new_stream(stream, HttpStreamReader::new(), SocketStatus::Reused));
                         } else {
                             debug!("{:?} - Done writing, killing socket", token);

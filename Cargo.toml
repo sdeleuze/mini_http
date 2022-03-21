@@ -16,7 +16,7 @@ travis-ci = { repository = "jaemk/mini_http", branch = "master" }
 error-chain = "0.12"
 threadpool = "1"
 num_cpus = "1"
-mio = "0.6"
+mio = { version = "0.8", features=[ "os-poll", "net" ] }
 slab = "0.4"
 httparse = "1"
 http = "0.1"
