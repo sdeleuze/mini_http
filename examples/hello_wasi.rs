@@ -1,9 +1,8 @@
-extern crate mini_http;
 extern crate log;
+extern crate mini_http;
 extern crate simple_logger;
 
 use simple_logger::SimpleLogger;
-
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     SimpleLogger::new().init().unwrap();
@@ -19,10 +18,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 pub fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {:?}", e);
     }
 }
-
