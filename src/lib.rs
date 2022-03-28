@@ -21,30 +21,32 @@ Note: If you're experiencing poor performance on benchmarks, see
 [`tcp_nodelay`](struct.Server.html#method.tcp_nodelay)
 */
 
-#![recursion_limit="1024"]
-#[macro_use] extern crate error_chain;
-#[macro_use] extern crate log;
+#![recursion_limit = "1024"]
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+extern crate http;
+extern crate httparse;
 extern crate mio;
 extern crate slab;
-extern crate httparse;
-extern crate http;
 
-#[macro_use] mod macros;
+#[macro_use]
+mod macros;
 mod errors;
 mod http_stream;
 
-use std::io::{self, Read, Write};
-use mio::net::{TcpListener};
 pub use http::header;
 pub use http::method;
 pub use http::response;
 pub use http::status;
 pub use http::uri;
 pub use http::version;
+use mio::net::TcpListener;
+use std::io::{self, Read, Write};
 
-use http_stream::HttpStreamReader;
 pub use errors::*;
-
+use http_stream::HttpStreamReader;
 
 /// Re-exported `http::Response` for constructing return responses in handlers
 pub use http::Response;
@@ -80,30 +82,39 @@ fn get_tcp_listener(addr: Option<String>) -> TcpListener {
     TcpListener::bind(addr.unwrap().parse().unwrap()).unwrap()
 }
 
-
 /// Internal `http::Response` wrapper with helpers for constructing the bytes
 /// that needs to be written back a Stream
 struct ResponseWrapper {
     inner: http::Response<Vec<u8>>,
-    header_data: Vec<u8>
+    header_data: Vec<u8>,
 }
 impl ResponseWrapper {
     fn new(inner: http::Response<Vec<u8>>) -> Self {
-        Self { inner, header_data: Vec::with_capacity(1024) }
+        Self {
+            inner,
+            header_data: Vec::with_capacity(1024),
+        }
     }
 
     fn serialize_headers(&mut self) {
         {
             let body_len = self.inner.body().len();
             let hdrs = self.inner.headers_mut();
-            hdrs.insert(header::SERVER, header::HeaderValue::from_static("mini-http (rust)"));
+            hdrs.insert(
+                header::SERVER,
+                header::HeaderValue::from_static("mini-http (rust)"),
+            );
             if body_len > 0 {
                 let len = header::HeaderValue::from_str(&body_len.to_string()).unwrap();
                 hdrs.insert(header::CONTENT_LENGTH, len);
             }
         }
         let status = self.inner.status();
-        let s = format!("HTTP/1.1 {} {}\r\n", status.as_str(), status.canonical_reason().unwrap_or("Unsupported Status"));
+        let s = format!(
+            "HTTP/1.1 {} {}\r\n",
+            status.as_str(),
+            status.canonical_reason().unwrap_or("Unsupported Status")
+        );
         self.header_data.extend_from_slice(&s.as_bytes());
 
         for (key, value) in self.inner.headers().iter() {
@@ -127,10 +138,8 @@ impl std::ops::DerefMut for ResponseWrapper {
     }
 }
 
-
 /// Represent everything about a request except its (possible) body
 type RequestHead = http::Request<()>;
-
 
 /// `Request` received and used by handlers. Wraps & `deref`s to an `http::Request`
 /// and patches `Request::body` to return the correct slice of bytes from the
@@ -186,20 +195,26 @@ impl Socket {
     }
 
     /// Construct a "continued" stream. Stream reading hasn't been completed yet
-    fn continued_stream(stream: mio::net::TcpStream,
-                        reader: HttpStreamReader,
-                        request: Option<RequestHead>,
-                        done_reading: bool,
-                        bytes_written: usize) -> Self
-    {
-        Socket::Stream { stream, reader, request, done_reading, bytes_written }
+    fn continued_stream(
+        stream: mio::net::TcpStream,
+        reader: HttpStreamReader,
+        request: Option<RequestHead>,
+        done_reading: bool,
+        bytes_written: usize,
+    ) -> Self {
+        Socket::Stream {
+            stream,
+            reader,
+            request,
+            done_reading,
+            bytes_written,
+        }
     }
 }
 
-
 pub struct Server {
     addr: Option<String>,
-    no_delay: bool
+    no_delay: bool,
 }
 impl Server {
     /// Initialize a new default `Server` to run on `addr`
@@ -207,7 +222,7 @@ impl Server {
     pub fn new(addr: &str) -> Result<Self> {
         Ok(Self {
             addr: Some(addr.to_string()),
-            no_delay: false
+            no_delay: false,
         })
     }
 
@@ -215,7 +230,7 @@ impl Server {
     pub fn preopened() -> Result<Self> {
         Ok(Self {
             addr: None,
-            no_delay: false
+            no_delay: false,
         })
     }
 
@@ -241,7 +256,8 @@ impl Server {
 
     /// Start the server using the given handler function
     pub fn start<F>(&self, func: F) -> Result<()>
-        where F: 'static + Fn(Request) -> Response<Vec<u8>>
+    where
+        F: 'static + Fn(Request) -> Response<Vec<u8>>,
     {
         let mut sockets = slab::Slab::with_capacity(1024);
         let mut server = get_tcp_listener(self.addr.clone());
@@ -252,7 +268,8 @@ impl Server {
             // register our tcp listener
             let entry = sockets.vacant_entry();
             let server_token = Token(entry.key());
-            poll.registry().register(&mut server, server_token, Interest::READABLE)?;
+            poll.registry()
+                .register(&mut server, server_token, Interest::READABLE)?;
             entry.insert(Socket::new_listener(server));
         }
 
@@ -278,28 +295,37 @@ impl Server {
                                     // register the newly opened socket
                                     let entry = sockets.vacant_entry();
                                     let token = Token(entry.key());
-                                    poll.registry().register(&mut sock, token, Interest::READABLE | Interest::WRITABLE)?;
+                                    poll.registry().register(
+                                        &mut sock,
+                                        token,
+                                        Interest::READABLE | Interest::WRITABLE,
+                                    )?;
                                     entry.insert(Socket::new_stream(sock, HttpStreamReader::new()));
-                                },
-                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                    break
-                                },
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
                                 Err(e) => {
                                     error!("{:?} - Encountered error while accepting the connection: {:?}", token, e);
-                                    // let this socket die, jump to the next event
-                                    break
                                 }
                             };
                         }
                         // reregister listener
                         let entry = sockets.vacant_entry();
                         let token = Token(entry.key());
-                        poll.registry().reregister(&mut listener, token, Interest::READABLE)?;
+                        poll.registry()
+                            .reregister(&mut listener, token, Interest::READABLE)?;
                         entry.insert(Socket::new_listener(listener));
                     }
                     Socket::Stream {
-                        mut stream, mut reader, request, mut done_reading, mut bytes_written
+                        mut stream,
+                        mut reader,
+                        request,
+                        mut done_reading,
+                        mut bytes_written,
                     } => {
+                        if e.is_read_closed() || e.is_write_closed() {
+                            poll.registry().deregister(&mut stream)?;
+                            continue 'next_event;
+                        }
 
                         // Try reading and parsing a request from this stream.
                         // `try_build_request` will return `None` until the request is parsed and the
@@ -307,13 +333,16 @@ impl Server {
                         // to `true`. At that point, if this socket is readable, we still need to
                         // check if it's been closed, but we will no longer try parsing the request
                         // bytes
-                        let (mut request, err_response): (Option<RequestHead>, Option<ResponseWrapper>) = if e.is_readable() {
+                        let (mut request, err_response): (
+                            Option<RequestHead>,
+                            Option<ResponseWrapper>,
+                        ) = if e.is_readable() {
                             let mut buf = [0; 256];
                             let stream_close = loop {
                                 match stream.read(&mut buf) {
                                     Ok(0) => {
                                         // the stream has ended for real
-                                        break true
+                                        break true;
                                     }
                                     Ok(n) => {
                                         reader.receive_chunk(&buf[..n]);
@@ -328,7 +357,7 @@ impl Server {
                                     Err(e) => {
                                         error!("{:?} - Encountered error while reading from socket: {:?}", token, e);
                                         // let this socket die, jump to the next event
-                                        break true
+                                        break true;
                                     }
                                 }
                             };
@@ -337,7 +366,8 @@ impl Server {
                                 // jump to the next mio event
                                 // TODO: if we have a `receiver` (a handler is running)
                                 //       try shutting it down
-                                continue 'next_event
+                                poll.registry().deregister(&mut stream)?;
+                                continue 'next_event;
                             }
                             if done_reading {
                                 (request, None)
@@ -346,10 +376,19 @@ impl Server {
                                     Ok(r) => (r, None),
                                     Err(e) => {
                                         // TODO: return the proper status-code per error
-                                        error!("{:?} - Encountered error while parsing: {}", token, e);
-                                        (None,
-                                         Some(ResponseWrapper::new(
-                                             Response::builder().status(400).body(b"bad request".to_vec()).unwrap())))
+                                        error!(
+                                            "{:?} - Encountered error while parsing: {}",
+                                            token, e
+                                        );
+                                        (
+                                            None,
+                                            Some(ResponseWrapper::new(
+                                                Response::builder()
+                                                    .status(400)
+                                                    .body(b"bad request".to_vec())
+                                                    .unwrap(),
+                                            )),
+                                        )
                                     }
                                 }
                             }
@@ -409,7 +448,7 @@ impl Server {
                                         // If it didn't fail because of a connection error (connection
                                         // is still alive), it will eventually be flushed by the os
                                         stream.flush().ok();
-                                        break 'write
+                                        break 'write;
                                     };
                                     match stream.write(&data[read_start..]) {
                                         Ok(n) => {
@@ -422,12 +461,11 @@ impl Server {
                                         Err(e) => {
                                             error!("{:?} - Encountered error while writing to socket: {:?}", token, e);
                                             // let this socket die, jump to the next event
-                                            continue 'next_event
+                                            break 'write;
                                         }
                                     }
                                 }
-                            }
-                            else {
+                            } else {
                                 debug!("Body not writeable for token {:?}", token);
                             }
                         }
@@ -438,14 +476,21 @@ impl Server {
                             debug!("Write not done, reregister stream for token {:?}", token);
                             let entry = sockets.vacant_entry();
                             let token = Token(entry.key());
-                            poll.registry().reregister(&mut stream, token, Interest::READABLE | Interest::WRITABLE)?;
-                            entry.insert(
-                                Socket::continued_stream(
-                                    stream, reader, request, done_reading, bytes_written,
-                                )
-                            );
+                            poll.registry().reregister(
+                                &mut stream,
+                                token,
+                                Interest::READABLE | Interest::WRITABLE,
+                            )?;
+                            entry.insert(Socket::continued_stream(
+                                stream,
+                                reader,
+                                request,
+                                done_reading,
+                                bytes_written,
+                            ));
                         } else {
                             debug!("{:?} - Done writing, killing socket", token);
+                            poll.registry().deregister(&mut stream)?;
                         }
                     }
                 }

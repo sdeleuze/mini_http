@@ -1,22 +1,23 @@
-extern crate mini_http;
 extern crate env_logger;
-#[macro_use] extern crate log;
-
+extern crate mini_http;
+#[macro_use]
+extern crate log;
 
 fn init_logger() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::new()
         .format(|buf, record| {
-            writeln!(buf, "[{}] - [{}] -> {}",
+            writeln!(
+                buf,
+                "[{}] - [{}] -> {}",
                 record.level(),
                 record.module_path().unwrap_or("<unkown>"),
                 record.args()
-                )
-            })
+            )
+        })
         .parse(&::std::env::var("LOG").unwrap_or_default())
         .init();
     Ok(())
 }
-
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_logger()?;
@@ -38,10 +39,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 pub fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
     }
 }
-

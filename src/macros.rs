@@ -3,7 +3,6 @@ Macros
 
 */
 
-
 // -------------
 // error-chain
 // -------------
@@ -17,7 +16,6 @@ macro_rules! format_err {
         $error(format!($str, $($arg),*))
     }
 }
-
 
 /// Helper for formatting strings with error-chain's `bail!` macro
 macro_rules! bail_fmt {

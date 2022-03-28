@@ -11,7 +11,7 @@ license = "MIT"
 
 [dependencies]
 error-chain = "0.12"
-mio = { version = "0.8.2", features=[ "os-poll", "net" ] }
+mio = { git = "https://github.com/haraldh/mio", branch = "combine_events", features=[ "os-poll", "net" ] }
 slab = "0.4"
 httparse = "1"
 http = "0.1"
