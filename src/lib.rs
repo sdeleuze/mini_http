@@ -302,11 +302,9 @@ impl Server {
                                     )?;
                                     entry.insert(Socket::new_stream(sock, HttpStreamReader::new()));
                                 }
-                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
                                 Err(e) => {
                                     error!("{:?} - Encountered error while accepting the connection: {:?}", token, e);
-                                    // let this socket die, jump to the next event
-                                    break;
                                 }
                             };
                         }
@@ -324,6 +322,11 @@ impl Server {
                         mut done_reading,
                         mut bytes_written,
                     } => {
+                        if e.is_read_closed() || e.is_write_closed() {
+                            poll.registry().deregister(&mut stream)?;
+                            continue 'next_event;
+                        }
+
                         // Try reading and parsing a request from this stream.
                         // `try_build_request` will return `None` until the request is parsed and the
                         // body is done being read. After that, `done_reading` will be set
@@ -363,6 +366,7 @@ impl Server {
                                 // jump to the next mio event
                                 // TODO: if we have a `receiver` (a handler is running)
                                 //       try shutting it down
+                                poll.registry().deregister(&mut stream)?;
                                 continue 'next_event;
                             }
                             if done_reading {
@@ -457,7 +461,7 @@ impl Server {
                                         Err(e) => {
                                             error!("{:?} - Encountered error while writing to socket: {:?}", token, e);
                                             // let this socket die, jump to the next event
-                                            continue 'next_event;
+                                            break 'write;
                                         }
                                     }
                                 }
@@ -486,6 +490,7 @@ impl Server {
                             ));
                         } else {
                             debug!("{:?} - Done writing, killing socket", token);
+                            poll.registry().deregister(&mut stream)?;
                         }
                     }
                 }
