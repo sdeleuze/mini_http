@@ -461,7 +461,7 @@ impl Server {
                                         Err(e) => {
                                             error!("{:?} - Encountered error while writing to socket: {:?}", token, e);
                                             // let this socket die, jump to the next event
-                                            break 'write;
+                                            done_write = true;
                                         }
                                     }
                                 }
