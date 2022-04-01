@@ -65,13 +65,13 @@ fn get_first_listen_fd_listener() -> Option<std::net::TcpListener> {
 
 #[cfg(windows)]
 fn get_first_listen_fd_listener() -> Option<std::net::TcpListener> {
-    // Windows does not support `LISTEN_FDS`
+    // Windows does not support `FD_COUNT`
     None
 }
 
 #[cfg(target_os = "wasi")]
 fn get_tcp_listener(_addr: Option<String>) -> TcpListener {
-    std::env::var("LISTEN_FDS").expect("LISTEN_FDS environment variable unset");
+    std::env::var("FD_COUNT").expect("FD_COUNT environment variable unset");
     let stdlistener = get_first_listen_fd_listener().unwrap();
     stdlistener.set_nonblocking(true).unwrap();
     TcpListener::from_std(stdlistener)
