@@ -8,8 +8,6 @@
 
 ## Status
 
-## Status
-
 Thanks to @sunfishcode and @haraldh help this should work:
 - With Wasmtime patched with [this commit](https://github.com/sunfishcode/wasmtime/commit/ab045157c4e7b3094c6c32ea48e4a7917cb056b3).
 - Notice [a special `mio` branch](https://github.com/haraldh/mio/tree/combine_events) is specified in the `Cargo.toml`.
@@ -42,3 +40,4 @@ fn run() -> Result<(), Box<std::error::Error>> {
 }
 ```
 
+WASI system calls can be traced with `RUST_LOG=wasi_common=trace wasmtime ...`.
