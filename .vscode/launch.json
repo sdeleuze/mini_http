@@ -1,0 +1,36 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug 'hello'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=hello"
+                ]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug 'hello_wasi'",
+            "cargo": {
+                "args": [
+                    "+nightly",
+                    "build",
+                    "--target",
+                    "wasm32-wasi",
+                    "--example",
+                    "hello_wasi"
+                ]
+            },
+            "cwd": "${workspaceFolder}",
+            "program": "~/.wasmtime/bin/wasmtime",
+            "args": ["run", "-g", "--tcplisten", "127.0.0.1:3000", "--env", "LISTEN_FDS=1", "target/wasm32-wasi/debug/examples/hello_wasi.wasm"]
+        }
+    ]
+}
