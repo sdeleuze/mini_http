@@ -1,30 +1,15 @@
-extern crate env_logger;
 extern crate mini_http;
-#[macro_use]
-extern crate log;
+extern crate simple_logger;
 
-fn init_logger() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::new()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "[{}] - [{}] -> {}",
-                record.level(),
-                record.module_path().unwrap_or("<unkown>"),
-                record.args()
-            )
-        })
-        .parse(&::std::env::var("LOG").unwrap_or_default())
-        .init();
-    Ok(())
-}
+use simple_logger::SimpleLogger;
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    init_logger()?;
+    SimpleLogger::new().init().unwrap();
+
     mini_http::Server::new("127.0.0.1:3000")?
         .tcp_nodelay(true)
         .start(|request| {
-            info!("request body: {:?}", std::str::from_utf8(request.body()));
+            log::info!("request body: {:?}", std::str::from_utf8(request.body()));
             let resp = if request.body().len() > 0 {
                 request.body().to_vec()
             } else {

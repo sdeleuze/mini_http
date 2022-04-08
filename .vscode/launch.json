@@ -4,6 +4,19 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "Debug 'echo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=echo"
+                ]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug 'hello'",
             "cargo": {
                 "args": [
