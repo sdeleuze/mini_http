@@ -1,2 +1,1 @@
-cargo +nightly build --target wasm32-wasi --example hello_wasi
-wasmtime run --tcplisten 127.0.0.1:3000 --env 'LISTEN_FDS=1' target/wasm32-wasi/debug/examples/hello_wasi.wasm
+CARGO_TARGET_WASM32_WASI_RUNNER="wasmtime run --tcplisten 127.0.0.1:3000 --env LISTEN_FDS=1" cargo +nightly run --release --target wasm32-wasi  --example hello_wasi
