@@ -14,7 +14,7 @@ error-chain = "0.12"
 mio = { git = "https://github.com/haraldh/mio", branch = "combine_events", features=[ "os-poll", "net" ] }
 slab = "0.4"
 httparse = "1"
-http = "0.1"
+http = "0.2"
 log = "0.4"
 simple_logger = "2.1"
 

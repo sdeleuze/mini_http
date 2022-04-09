@@ -140,13 +140,13 @@ impl HttpStreamReader {
             debug_assert!(self.headers_length == status.unwrap());
 
             // HTTP parsing success. Build an `http::Request`
-            let mut request = http::Request::builder();
-            request.method(req.method.unwrap());
-            request.uri(req.path.unwrap());
+            let mut request = http::Request::builder()
+                .method(req.method.unwrap())
+                .uri(req.path.unwrap());
             // TODO: http::Request expects consts and not strs. Defaults to HTTP/1.1 for now
             // request.version(req.version.unwrap());
             for header in req.headers {
-                request.header(header.name, header.value);
+                request = request.header(header.name, header.value);
             }
             // use an empty body as a placeholder while we continue to read the request body
             let request = request.body(()).unwrap();
