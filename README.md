@@ -8,11 +8,9 @@
 
 ## Status
 
-Thanks to @sunfishcode and @haraldh help this should work:
-- With Wasmtime patched with [this commit](https://github.com/sunfishcode/wasmtime/commit/ab045157c4e7b3094c6c32ea48e4a7917cb056b3).
-- Notice [a special `mio` branch](https://github.com/haraldh/mio/tree/combine_events) is specified in the `Cargo.toml`.
+Thanks to @sunfishcode and @haraldh help this should work. Notice [a special `mio` branch](https://github.com/haraldh/mio/tree/combine_events) is specified in the `Cargo.toml`.
 
-Next step is to update the server to handle `readable` and `writeable` events separately to not require a special Mio branch.
+Next step could be to update the server to handle `readable` and `writeable` events separately to not require a special Mio branch.
 
 ## Usage
 
