@@ -1,3 +1,5 @@
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/sdeleuze/mini_http)
+
 # mini_http
 
 **Note:** This project is a work in progress and shouldn't be used in any critical production environment.
